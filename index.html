@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>シーン切り抜き</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --card: #fff; --text: #1d2329; --muted: #6b7680;
+    --accent: #1f9d55; --accent-d: #17803f; --danger: #d64545; --line: #dde3e8;
+    --band: rgba(31,157,85,.35); --mark: #f2a516;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181c; --card:#1e2329; --text:#e8edf1; --muted:#9aa5ae; --line:#323a42; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+  header { padding:14px 16px; background:var(--accent); color:#fff; }
+  header h1 { margin:0; font-size:20px; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  #drop { border:2px dashed var(--line); text-align:center; padding:40px 16px; cursor:pointer; }
+  #drop.over { border-color:var(--accent); background:rgba(31,157,85,.06); }
+  #drop p { margin:8px 0; color:var(--muted); }
+  video { width:100%; max-height:60vh; background:#000; border-radius:8px; display:block; }
+  #timeline { position:relative; height:28px; margin-top:10px; background:var(--line);
+    border-radius:6px; cursor:pointer; overflow:hidden; }
+  #timeline .band { position:absolute; top:0; bottom:0; background:var(--band); }
+  #timeline .mk { position:absolute; top:0; bottom:0; width:3px; margin-left:-1px; background:var(--mark); }
+  #playhead { position:absolute; top:0; bottom:0; width:2px; background:var(--text); pointer-events:none; }
+  .timeinfo { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:4px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:12px; }
+  button { font:inherit; border:0; border-radius:8px; padding:10px 14px; cursor:pointer;
+    background:var(--line); color:var(--text); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#fff; font-weight:bold; }
+  button.primary:hover:not(:disabled) { background:var(--accent-d); }
+  #markBtn { font-size:18px; padding:14px 22px; background:var(--mark); color:#000; font-weight:bold; }
+  input[type=number] { width:64px; font:inherit; padding:6px; border:1px solid var(--line);
+    border-radius:6px; background:var(--card); color:var(--text); }
+  .hint { font-size:12px; color:var(--muted); }
+  h2 { font-size:16px; margin:0 0 10px; }
+  #list { list-style:none; padding:0; margin:0; }
+  #list li { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); }
+  #list li .no { width:28px; color:var(--muted); }
+  #list li .t { font-weight:bold; font-variant-numeric:tabular-nums; }
+  #list li .r { color:var(--muted); font-size:13px; flex:1; font-variant-numeric:tabular-nums; }
+  #list li button { padding:6px 10px; font-size:13px; }
+  #list li button.del { color:var(--danger); }
+  .empty { color:var(--muted); padding:8px 0; }
+  #progressBox { margin-top:12px; }
+  progress { width:100%; height:14px; }
+  #results a { display:block; margin-top:6px; color:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1>⚽ シーン切り抜き</h1></header>
+<main>
+  <label id="drop" class="card">
+    <strong>📂 動画ファイルを選ぶ（またはここにドロップ）</strong>
+    <p>スマホで撮った長い動画からゴールシーンなどを抜き出します</p>
+    <input id="file" type="file" accept="video/*" hidden>
+  </label>
+
+  <section id="editor" hidden>
+    <div class="card">
+      <video id="video" controls playsinline preload="auto"></video>
+      <div id="timeline"><div id="playhead"></div></div>
+      <div class="timeinfo"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+
+      <div class="row">
+        <button id="markBtn">📌 ここをマーク</button>
+        <label>前 <input id="before" type="number" value="5" min="0" step="1"> 秒</label>
+        <label>後 <input id="after" type="number" value="5" min="0" step="1"> 秒</label>
+      </div>
+      <p class="hint">キーボード：M＝マーク ／ スペース＝再生・停止 ／ ←→＝5秒移動（Shift で1秒）</p>
+    </div>
+
+    <div class="card">
+      <h2>マークしたシーン <span id="count"></span></h2>
+      <ul id="list"></ul>
+      <div class="row">
+        <button id="exportOne" class="primary">🎬 1本の動画にまとめて書き出し</button>
+        <button id="exportEach">シーンごとに別々の動画で書き出し</button>
+      </div>
+      <p class="hint">書き出しは再生しながら録画するため、切り抜く合計時間と同じくらいかかります。書き出し中はこのタブを表示したままにしてください。</p>
+      <div id="progressBox" hidden>
+        <div id="progressText">書き出し中…</div>
+        <progress id="progress" value="0" max="1"></progress>
+        <div class="row"><button id="cancelBtn">中止</button></div>
+      </div>
+      <div id="results"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const video = $('#video');
+let marks = [];
+let baseName = 'video';
+let busy = false, cancelled = false;
+let audioCtx, srcNode, speakerGain, recDest;
+
+// ---------- ファイル読み込み ----------
+function loadFile(file) {
+  if (!file) return;
+  if (video.src) URL.revokeObjectURL(video.src);
+  video.src = URL.createObjectURL(file);
+  baseName = file.name.replace(/\.[^.]+$/, '');
+  marks = [];
+  $('#results').innerHTML = '';
+  $('#editor').hidden = false;
+  render();
+}
+$('#file').addEventListener('change', e => loadFile(e.target.files[0]));
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+// ---------- ユーティリティ ----------
+function fmt(t) {
+  t = Math.max(0, t || 0);
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = Math.floor(t % 60);
+  const ss = String(s).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+const before = () => Math.max(0, +$('#before').value || 0);
+const after = () => Math.max(0, +$('#after').value || 0);
+
+function rangeOf(t) {
+  return { start: Math.max(0, t - before()), end: Math.min(video.duration || 0, t + after()) };
+}
+// 重なったシーンは1つにまとめる
+function mergedRanges() {
+  const out = [];
+  for (const t of [...marks].sort((a, b) => a - b)) {
+    const r = rangeOf(t), last = out[out.length - 1];
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);
+    else out.push(r);
+  }
+  return out.filter(r => r.end > r.start);
+}
+
+// ---------- 画面表示 ----------
+function render() {
+  const d = video.duration || 0;
+  const tl = $('#timeline');
+  tl.querySelectorAll('.band,.mk').forEach(el => el.remove());
+  if (d) {
+    for (const r of mergedRanges()) {
+      const b = document.createElement('div');
+      b.className = 'band';
+      b.style.left = (r.start / d * 100) + '%';
+      b.style.width = ((r.end - r.start) / d * 100) + '%';
+      tl.appendChild(b);
+    }
+    for (const t of marks) {
+      const m = document.createElement('div');
+      m.className = 'mk';
+      m.style.left = (t / d * 100) + '%';
+      tl.appendChild(m);
+    }
+  }
+  const list = $('#list');
+  list.innerHTML = '';
+  const sorted = [...marks].sort((a, b) => a - b);
+  if (!sorted.length) list.innerHTML = '<li class="empty">まだマークがありません。ゴールの瞬間で「📌 ここをマーク」を押してください。</li>';
+  sorted.forEach((t, i) => {
+    const r = rangeOf(t);
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="no">${i + 1}</span><span class="t">${fmt(t)}</span>
+      <span class="r">${fmt(r.start)} 〜 ${fmt(r.end)}（${Math.round(r.end - r.start)}秒）</span>`;
+    const pv = document.createElement('button');
+    pv.textContent = '▶ 確認';
+    pv.onclick = () => preview(r);
+    const del = document.createElement('button');
+    del.textContent = '✕ 削除';
+    del.className = 'del';
+    del.onclick = () => { marks = marks.filter(x => x !== t); render(); };
+    li.append(pv, del);
+    list.appendChild(li);
+  });
+  const merged = mergedRanges();
+  const total = merged.reduce((s, r) => s + r.end - r.start, 0);
+  $('#count').textContent = marks.length ? `（${marks.length}件・合計 ${fmt(total)}）` : '';
+  $('#exportOne').disabled = $('#exportEach').disabled = busy || !marks.length;
+  $('#markBtn').disabled = busy;
+  $('#dur').textContent = fmt(d);
+}
+video.addEventListener('loadedmetadata', render);
+video.addEventListener('timeupdate', () => {
+  const d = video.duration || 0;
+  $('#cur').textContent = fmt(video.currentTime);
+  $('#playhead').style.left = d ? (video.currentTime / d * 100) + '%' : 0;
+});
+$('#timeline').addEventListener('click', e => {
+  if (busy || !video.duration) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  video.currentTime = (e.clientX - rect.left) / rect.width * video.duration;
+});
+['input', 'change'].forEach(ev => {
+  $('#before').addEventListener(ev, render);
+  $('#after').addEventListener(ev, render);
+});
+
+// ---------- マーク ----------
+function addMark() {
+  if (busy || !video.duration) return;
+  const t = video.currentTime;
+  if (marks.some(x => Math.abs(x - t) < 0.5)) return;
+  marks.push(t);
+  render();
+}
+$('#markBtn').addEventListener('click', addMark);
+
+document.addEventListener('keydown', e => {
+  if (busy || $('#editor').hidden) return;
+  if (e.target.tagName === 'INPUT') return;
+  const step = e.shiftKey ? 1 : 5;
+  if (e.key === 'm' || e.key === 'M') { addMark(); e.preventDefault(); }
+  else if (e.key === ' ') { video.paused ? video.play() : video.pause(); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft') { video.currentTime = Math.max(0, video.currentTime - step); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { video.currentTime = Math.min(video.duration, video.currentTime + step); e.preventDefault(); }
+});
+
+// ---------- 再生制御 ----------
+function seekTo(t) {
+  return new Promise(res => {
+    if (Math.abs(video.currentTime - t) < 0.01) return res();
+    video.addEventListener('seeked', () => res(), { once: true });
+    video.currentTime = t;
+  });
+}
+// 画面が非表示でも止まらないよう、rAF に加えて timeupdate / ended でも終了を判定する
+function playUntil(end, onTick) {
+  return new Promise((res, rej) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      video.pause();
+      video.removeEventListener('timeupdate', tick);
+      video.removeEventListener('ended', finish);
+      res();
+    };
+    function tick() {
+      if (finished) return;
+      if (cancelled || video.currentTime >= end || video.ended) return finish();
+      onTick && onTick(video.currentTime);
+    }
+    const loop = () => { tick(); if (!finished) requestAnimationFrame(loop); };
+    video.addEventListener('timeupdate', tick);
+    video.addEventListener('ended', finish);
+    video.play().then(() => requestAnimationFrame(loop), err => { finished = true; rej(err); });
+  });
+}
+let previewId = 0;
+async function preview(r) {
+  if (busy) return;
+  const id = ++previewId;
+  await seekTo(r.start);
+  if (id !== previewId) return;
+  await video.play();
+  const check = () => {
+    if (id !== previewId || video.paused) return;
+    if (video.currentTime >= r.end) { video.pause(); return; }
+    requestAnimationFrame(check);
+  };
+  requestAnimationFrame(check);
+}
+
+// ---------- 書き出し ----------
+function ensureAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  srcNode = audioCtx.createMediaElementSource(video);
+  speakerGain = audioCtx.createGain();
+  recDest = audioCtx.createMediaStreamDestination();
+  srcNode.connect(speakerGain).connect(audioCtx.destination);
+  srcNode.connect(recDest);
+}
+function pickMime() {
+  const cands = [
+    'video/mp4;codecs=avc1.640028,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
+  return cands.find(m => MediaRecorder.isTypeSupported(m)) || '';
+}
+
+// 指定区間を順番に再生しながら録画して1本の動画にする
+async function recordRanges(ranges, onProgress) {
+  ensureAudio();
+  await audioCtx.resume();
+  const w = video.videoWidth, h = video.videoHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  const stream = new MediaStream([
+    ...canvas.captureStream(30).getVideoTracks(),
+    ...recDest.stream.getAudioTracks(),
+  ]);
+  const mime = pickMime();
+  const bitrate = Math.min(12e6, Math.max(2.5e6, w * h * 30 * 0.15));
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate, audioBitsPerSecond: 128000 });
+  const chunks = [];
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  const stopped = new Promise(res => rec.onstop = res);
+
+  let drawing = true;
+  const draw = () => {
+    if (!drawing) return;
+    ctx.drawImage(video, 0, 0, w, h);
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw);
+    else requestAnimationFrame(draw);
+  };
+
+  const total = ranges.reduce((s, r) => s + r.end - r.start, 0);
+  let done = 0;
+  speakerGain.gain.value = 0; // 書き出し中はスピーカー音を消す
+  try {
+    for (let i = 0; i < ranges.length && !cancelled; i++) {
+      const r = ranges[i];
+      await seekTo(r.start);
+      ctx.drawImage(video, 0, 0, w, h);
+      if (i === 0) { rec.start(1000); draw(); } else rec.resume();
+      await playUntil(r.end, t => onProgress((done + Math.max(0, t - r.start)) / total));
+      rec.pause();
+      done += r.end - r.start;
+    }
+  } finally {
+    drawing = false;
+    speakerGain.gain.value = 1;
+    if (rec.state !== 'inactive') rec.stop();
+    await stopped;
+  }
+  const type = (mime || 'video/webm').split(';')[0];
+  return { blob: new Blob(chunks, { type }), ext: type.includes('mp4') ? 'mp4' : 'webm' };
+}
+
+function addResult(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  a.textContent = `⬇ ${name}（${(blob.size / 1024 / 1024).toFixed(1)} MB）`;
+  $('#results').appendChild(a);
+  a.click();
+}
+
+async function runExport(groups) {
+  if (busy || !groups.length) return;
+  busy = true; cancelled = false;
+  render();
+  video.controls = false;
+  $('#progressBox').hidden = false;
+  try {
+    for (let g = 0; g < groups.length && !cancelled; g++) {
+      const label = groups.length > 1 ? `シーン ${g + 1}/${groups.length} を書き出し中…` : '書き出し中…';
+      $('#progressText').textContent = label;
+      const { blob, ext } = await recordRanges(groups[g], p => {
+        $('#progress').value = (g + p) / groups.length;
+        $('#progressText').textContent = `${label} ${Math.floor((g + p) / groups.length * 100)}%`;
+      });
+      if (cancelled) break;
+      const name = groups.length > 1
+        ? `${baseName}_scene${String(g + 1).padStart(2, '0')}.${ext}`
+        : `${baseName}_まとめ.${ext}`;
+      addResult(blob, name);
+    }
+    $('#progressText').textContent = cancelled ? '中止しました' : '✅ 完了しました（下のリンクからも保存できます）';
+  } catch (err) {
+    console.error(err);
+    $('#progressText').textContent = '⚠ 書き出しに失敗しました: ' + err.message;
+  } finally {
+    $('#progress').value = cancelled ? 0 : 1;
+    busy = false;
+    video.controls = true;
+    render();
+  }
+}
+$('#exportOne').addEventListener('click', () => runExport([mergedRanges()]));
+$('#exportEach').addEventListener('click', () => runExport(mergedRanges().map(r => [r])));
+$('#cancelBtn').addEventListener('click', () => { cancelled = true; });
+</script>
+</body>
+</html>
